@@ -1,35 +1,59 @@
 import os
-import sys
-from dotenv import load_dotenv
+from nicegui import ui, app
+from fastapi import FastAPI, UploadFile, File
+from fastapi.responses import FileResponse
+from app.services.image_processing import process_image, change_skin_tone
+from app.services.color_recommendation import get_color_recommendations
 
-# Load environment variables
-load_dotenv()
+fastapi_app = FastAPI()
+app.include_router(fastapi_app)
 
-# Add the current directory to the path to ensure imports work correctly
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+UPLOAD_DIR = "uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-# Determine which framework to use based on environment variable
-# Default to FastAPI if not specified
-FRAMEWORK = os.getenv("FRAMEWORK", "fastapi").lower()
+@ui.page('/')
+def home():
+    ui.label('Skin Tone Color Recommendation App').classes('text-h3 mb-4')
+    
+    file = ui.upload(label='Upload Image', auto_upload=True).classes('mb-4')
+    
+    image = ui.image().classes('w-64 h-64 object-cover mb-4')
+    recommendations = ui.label().classes('mb-4')
+    
+    skin_tone_slider = ui.slider(min=0, max=100, value=50, label='Adjust Skin Tone').classes('mb-4')
+    
+    async def handle_upload(e):
+        if e.value:
+            file_path = os.path.join(UPLOAD_DIR, e.name)
+            with open(file_path, "wb") as f:
+                f.write(e.content.read())
+            
+            processed_image_path = process_image(file_path)
+            image.set_source(processed_image_path)
+            
+            colors = get_color_recommendations(processed_image_path)
+            recommendations.set_text(f"Recommended colors: {', '.join(colors)}")
+    
+    async def update_skin_tone(e):
+        if file.value:
+            file_path = os.path.join(UPLOAD_DIR, file.value[0].name)
+            adjusted_image_path = change_skin_tone(file_path, e.value)
+            image.set_source(adjusted_image_path)
+    
+    file.on('upload', handle_upload)
+    skin_tone_slider.on('change', update_skin_tone)
 
-# Import the appropriate application based on the framework
-if FRAMEWORK == "nicegui":
-    try:
-        from nicegui import ui, app as nicegui_app
-        # Setup NiceGUI app here
-        application = nicegui_app
-    except ImportError:
-        print("NiceGUI not installed. Please install with: pip install nicegui")
-        exit(1)
-else:
-    # Default to FastAPI
-    from app import app
-    application = app
+@fastapi_app.post("/upload/")
+async def upload_file(file: UploadFile = File(...)):
+    file_path = os.path.join(UPLOAD_DIR, file.filename)
+    with open(file_path, "wb") as f:
+        f.write(await file.read())
+    return {"filename": file.filename}
 
-# This is used by ASGI servers like Uvicorn
-app = application
+@fastapi_app.get("/image/{image_name}")
+async def get_image(image_name: str):
+    image_path = os.path.join(UPLOAD_DIR, image_name)
+    return FileResponse(image_path)
 
 if __name__ == "__main__":
-    import uvicorn
-    # Run the application with uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), reload=True)
+    ui.run(port=8080, reload=False)
